@@ -5,6 +5,15 @@ import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
 
+# ===================== DARK THEME =====================
+st.markdown("""
+<style>
+body {background-color:#0e1117;color:white;}
+.block-container {padding-top:1rem;}
+</style>
+""", unsafe_allow_html=True)
+
+# ===================== STOCK LIST =====================
 stocks = ["TATASTEEL.NS","ITC.NS","WIPRO.NS","IDFC.NS","BANKBARODA.NS","ONGC.NS"]
 
 # ===================== DATA =====================
@@ -15,67 +24,57 @@ def get_data(stock, period, interval):
 def analyze(data):
     score = 0
     rules = {}
-    
+
+    if len(data) < 20:
+        return 0, {}
+
     close = data['Close']
     open_ = data['Open']
     high = data['High']
     low = data['Low']
     volume = data['Volume']
-    
-    # 1 Trend
-    rules["Trend"] = close.iloc[-1] > close.mean()
-    score += 1 if rules["Trend"] else -1
-    
-    # 2 Momentum
-    rules["Momentum"] = close.iloc[-1] > close.iloc[-2]
-    score += 1 if rules["Momentum"] else -1
-    
-    # 3 Volume
-    rules["Volume"] = volume.iloc[-1] > volume.mean()
-    score += 1 if rules["Volume"] else 0
-    
-    # 4 Candle
-    rules["Candle"] = close.iloc[-1] > open_.iloc[-1]
-    score += 1 if rules["Candle"] else -1
-    
-    # 5 Breakout
-    rules["Breakout"] = close.iloc[-1] > high[:-1].max()
-    score += 2 if rules["Breakout"] else 0
-    
-    # 6 Breakdown
-    rules["Breakdown"] = close.iloc[-1] < low[:-1].min()
-    score -= 2 if rules["Breakdown"] else 0
-    
-    # 7 Volatility
-    rules["Volatility"] = (high.iloc[-1]-low.iloc[-1]) > (high.mean()-low.mean())
-    score += 1 if rules["Volatility"] else 0
-    
-    # 8 Buyer vs Seller
-    mid = (high.iloc[-1] + low.iloc[-1]) / 2
-    rules["BuyerStrength"] = close.iloc[-1] > mid
-    score += 1 if rules["BuyerStrength"] else -1
-    
-    # 9 Prev High
-    rules["PrevHigh"] = close.iloc[-1] > high.iloc[-2]
-    score += 1 if rules["PrevHigh"] else -1
-    
-    # 10 Prev Low
-    rules["PrevLow"] = close.iloc[-1] > low.iloc[-2]
-    score += 1 if rules["PrevLow"] else -1
-    
-    # 11 Gap
-    rules["GapUp"] = open_.iloc[-1] > close.iloc[-2]
-    score += 1 if rules["GapUp"] else 0
-    
-    # 12 MA Cross
+
+    trend = close.iloc[-1] > close.mean()
+    momentum = close.iloc[-1] > close.iloc[-2]
+    vol = volume.iloc[-1] > volume.mean()
+    candle = close.iloc[-1] > open_.iloc[-1]
+    breakout = close.iloc[-1] > high[:-1].max()
+    breakdown = close.iloc[-1] < low[:-1].min()
+    volat = (high.iloc[-1]-low.iloc[-1]) > (high.mean()-low.mean())
+    mid = (high.iloc[-1]+low.iloc[-1])/2
+    buyer = close.iloc[-1] > mid
+    prev_high = close.iloc[-1] > high.iloc[-2]
+    prev_low = close.iloc[-1] > low.iloc[-2]
+    gap = open_.iloc[-1] > close.iloc[-2]
+
     ma5 = close.rolling(5).mean()
     ma10 = close.rolling(10).mean()
-    rules["MA Cross"] = ma5.iloc[-1] > ma10.iloc[-1]
-    score += 1 if rules["MA Cross"] else -1
-    
+    ma_cross = ma5.iloc[-1] > ma10.iloc[-1]
+
+    rules = {
+        "Trend": trend,
+        "Momentum": momentum,
+        "Volume": vol,
+        "Candle": candle,
+        "Breakout": breakout,
+        "Breakdown": breakdown,
+        "Volatility": volat,
+        "Buyer": buyer,
+        "PrevHigh": prev_high,
+        "PrevLow": prev_low,
+        "GapUp": gap,
+        "MA Cross": ma_cross
+    }
+
+    for k, v in rules.items():
+        if v:
+            score += 1
+        else:
+            score -= 1
+
     return score, rules
 
-# ===================== PREDICT =====================
+# ===================== SIGNAL =====================
 def predict(score):
     if score >= 7:
         return "🔥 STRONG BUY"
@@ -88,28 +87,29 @@ def predict(score):
     else:
         return "⚠️ WAIT"
 
-# ===================== CONFIDENCE =====================
 def confidence(score):
     return min(100, abs(score)*10)
 
 # ===================== SESSION =====================
 def session_analysis(data):
     step = len(data)//4
-    parts = [data.iloc[i*step:(i+1)*step] for i in range(4)]
-    
     result = {}
-    for i, df in enumerate(parts):
+    for i in range(4):
+        df = data.iloc[i*step:(i+1)*step]
         if len(df) < 2: continue
         s = df['Close'].iloc[0]
         e = df['Close'].iloc[-1]
-        d = "UP" if e>s else "DOWN"
-        result[f"S{i+1}"] = (round(s,2),round(e,2),d)
-    
+        d = "UP" if e > s else "DOWN"
+        result[f"S{i+1}"] = (round(s,2), round(e,2), d)
     return result
 
 # ===================== BENCHMARK =====================
 def calc(df):
     return round(df['High'].max(),2), round(df['Low'].min(),2), round(df['Close'].mean(),2)
+
+# ===================== HEADER =====================
+st.markdown("# 📊 AI TRADING TERMINAL")
+st.markdown("### ⚡ Hybrid Intraday Signal Engine")
 
 # ===================== TIMEFRAME =====================
 tf = st.selectbox("Timeframe",["Today","3 Days","Weekly","Monthly","Yearly"])
@@ -120,77 +120,85 @@ elif tf=="Weekly": period,interval="7d","15m"
 elif tf=="Monthly": period,interval="1mo","30m"
 else: period,interval="1y","1d"
 
-st.title("📊 AI TRADING DASHBOARD (PRO)")
-
 # ===================== MAIN =====================
 rows=[]
 
 for s in stocks:
-    d=get_data(s,period,interval)
-    if len(d)<10: continue
-    
+    d = get_data(s,period,interval)
+    if d.empty: continue
+
     sc, rules = analyze(d)
     sig = predict(sc)
     conf = confidence(sc)
-    
+
     rows.append([s,sig,sc,conf])
 
-df=pd.DataFrame(rows,columns=["Stock","Signal","Score","Confidence %"])
+df = pd.DataFrame(rows,columns=["Stock","Signal","Score","Confidence"])
 
-st.dataframe(df,use_container_width=True)
+# ===================== BEST TRADE CARD =====================
+best = df.sort_values("Score",ascending=False).iloc[0]
 
-# ===================== BEST =====================
-best=df.sort_values("Score",ascending=False).iloc[0]
+color = "#00ff99" if "BUY" in best['Signal'] else "#ff4d4d"
 
 st.markdown(f"""
-## 🔥 BEST TRADE
-{best['Stock']} | {best['Signal']} | Confidence: {best['Confidence %']}%
-""")
+<div style='background:#1c1f26;padding:20px;border-radius:12px;
+border-left:6px solid {color};margin-bottom:15px;'>
+<h2>🔥 BEST TRADE: {best['Stock']}</h2>
+<h3>{best['Signal']}</h3>
+<h4>Confidence: {best['Confidence']}%</h4>
+</div>
+""", unsafe_allow_html=True)
+
+# ===================== TABLE =====================
+def color_signal(val):
+    if "BUY" in val:
+        return "background-color:#003300;color:#00ff00"
+    elif "SELL" in val:
+        return "background-color:#330000;color:#ff4d4d"
+    else:
+        return "background-color:#333300;color:#ffff66"
+
+st.dataframe(df.style.applymap(color_signal,subset=["Signal"]), use_container_width=True)
+
+st.markdown("---")
 
 # ===================== RULE BREAKDOWN =====================
-st.markdown("## 🧠 RULE BREAKDOWN")
+st.markdown("## 🧠 RULE ENGINE")
 
-sel=st.selectbox("Select Stock",stocks)
+sel = st.selectbox("Select Stock",stocks)
+d = get_data(sel,period,interval)
+sc, rules = analyze(d)
 
-d=get_data(sel,period,interval)
-sc,rules=analyze(d)
-
+cols = st.columns(4)
+i = 0
 for k,v in rules.items():
-    st.write(f"{k}: {'🟢' if v else '🔴'}")
+    cols[i%4].markdown(f"{k}: {'🟢' if v else '🔴'}")
+    i+=1
+
+st.markdown("---")
 
 # ===================== SESSION =====================
 st.markdown("## 📊 SESSION")
 
-today=yf.download(sel,period="1d",interval="5m")
-sess=session_analysis(today)
+today = yf.download(sel,period="1d",interval="5m")
+sess = session_analysis(today)
 
 for k,v in sess.items():
-    st.write(f"{k}: {v[0]} → {v[1]} ({'🟢' if v[2]=='UP' else '🔴'} {v[2]})")
+    color = "#00ff00" if v[2]=="UP" else "#ff4d4d"
+    st.markdown(f"<div style='padding:8px;background:#1c1f26;margin:4px;border-radius:6px;'>{k}: {v[0]} → {v[1]} <span style='color:{color}'>{v[2]}</span></div>", unsafe_allow_html=True)
 
-# ===================== HISTORY =====================
-st.markdown("## 📅 3 DAY HISTORY")
-
-d3=yf.download(sel,period="3d",interval="30m")
-d3['Date']=d3.index.date
-
-for dt,g in d3.groupby("Date"):
-    s=session_analysis(g)
-    line=f"{dt}: "
-    for k,v in s.items():
-        line+=f"{k}:{v[0]}-{v[1]} | "
-    st.text(line)
+st.markdown("---")
 
 # ===================== BENCHMARK =====================
 st.markdown("## 📊 BENCHMARK")
 
-yr=yf.download(sel,period="1y",interval="1d")
+yr = yf.download(sel,period="1y",interval="1d")
+w = yr.tail(5)
+m = yr.tail(22)
 
-w=yr.tail(5)
-m=yr.tail(22)
-
-wh,wl,wa=calc(w)
-mh,ml,ma=calc(m)
-yh,yl,ya=calc(yr)
+wh,wl,wa = calc(w)
+mh,ml,ma = calc(m)
+yh,yl,ya = calc(yr)
 
 st.markdown(f"""
 WEEK: {wh}/{wl} Avg:{wa}  
@@ -198,10 +206,12 @@ MONTH: {mh}/{ml} Avg:{ma}
 52W: {yh}/{yl} Avg:{ya}
 """)
 
-# ===================== PRED =====================
+st.markdown("---")
+
+# ===================== FINAL SIGNAL =====================
 st.markdown("## 💡 FINAL SIGNAL")
 
-cp=yr['Close'].iloc[-1]
+cp = yr['Close'].iloc[-1]
 
 if cp>ma and cp>wa:
     st.success("🔥 STRONG UP")
@@ -212,10 +222,12 @@ elif cp<ma and cp<wa:
 else:
     st.warning("⚠️ SIDEWAYS")
 
-# ===================== CHART =====================
-st.markdown("## 📊 CHART")
+st.markdown("---")
 
-fig=go.Figure(data=[go.Candlestick(
+# ===================== CHART =====================
+st.markdown("## 📊 LIVE CHART")
+
+fig = go.Figure(data=[go.Candlestick(
     x=d.index,
     open=d['Open'],
     high=d['High'],
@@ -225,4 +237,4 @@ fig=go.Figure(data=[go.Candlestick(
 
 fig.update_layout(template="plotly_dark")
 
-st.plotly_chart(fig,use_container_width=True)
+st.plotly_chart(fig, use_container_width=True)
