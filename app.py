@@ -1,153 +1,228 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import time
-import matplotlib.pyplot as plt
-import pyttsx3
-import requests
-import os, sys
-
-# ===== AUTO UPDATE =====
-def auto_update():
-    try:
-        os.system("pip install --upgrade yfinance pandas streamlit matplotlib pyttsx3")
-    except:
-        pass
-
-# ===== INTERNET CHECK =====
-def check_net():
-    try:
-        requests.get("https://google.com", timeout=3)
-        return True
-    except:
-        return False
-
-# ===== RETRY FETCH =====
-def fetch(stock):
-    for _ in range(5):
-        try:
-            data = yf.download(stock, period="5d", interval="5m", progress=False)
-            if not data.empty:
-                return data
-        except:
-            pass
-        time.sleep(2)
-    return None
-
-# ===== ERROR LOG =====
-def log_error(e):
-    with open("error_log.txt", "a") as f:
-        f.write(str(e)+"\n")
-
-# ===== RESTART =====
-def restart():
-    os.execv(sys.executable, ['python'] + sys.argv)
-
-# ===== SAFE VALUE =====
-def val(x):
-    try: return float(x)
-    except: return float(x.iloc[0]) if hasattr(x,"iloc") else 0
-
-# ===== ANALYSIS =====
-def analyze(d):
-    c,h,l,o,v = d['Close'],d['High'],d['Low'],d['Open'],d['Volume']
-    s=0
-    if c.iloc[-1]>val(c.mean()): s+=1
-    if c.iloc[-1]>c.iloc[-2]: s+=1
-    if v.iloc[-1]>val(v.mean()): s+=1
-    if c.iloc[-1]>o.iloc[-1]: s+=1
-    if c.iloc[-1]>val(h.max()): s+=2
-    if c.iloc[-1]<val(l.min()): s-=2
-    return s
-
-# ===== PREDICT =====
-def predict(s):
-    return "BUY 🟢" if s>=5 else "SELL 🔴" if s<=-3 else "WAIT 🟡"
-
-# ===== MOVEMENT =====
-def movement(d):
-    return "GOOD 💰" if abs(d['Close'].iloc[-1]-d['Close'].iloc[-2])>=2 else "LOW ⚠️"
-
-# ===== TRAP =====
-def trap(d):
-    if d['Volume'].iloc[-1] < val(d['Volume'].mean()):
-        return "⚠️ LOW VOL"
-    return "OK"
-
-# ===== SR =====
-def sr(d):
-    return round(d['Low'].tail(20).min(),2), round(d['High'].tail(20).max(),2)
-
-# ===== TRADE PLAN =====
-def plan(d,sup,res):
-    p=d['Close'].iloc[-1]
-    if p<=sup*1.01: return "BUY",p,p-1,p+2
-    if p>=res*0.99: return "SELL",p,p+1,p-2
-    return "WAIT",None,None,None
-
-# ===== SESSION =====
-def session(d):
-    out=[]
-    n=len(d)//4
-    for i in range(4):
-        seg=d.iloc[i*n:(i+1)*n]
-        if len(seg)<2: continue
-        a,b=seg['Close'].iloc[0],seg['Close'].iloc[-1]
-        out.append((f"S{i+1}",a,b,"🟢" if b>a else "🔴"))
-    return out
-
-# ===== START =====
-auto_update()
-
-stocks=["TATASTEEL.NS","ITC.NS","WIPRO.NS","IDFC.NS","BANKBARODA.NS","ONGC.NS"]
+import plotly.graph_objects as go
 
 st.set_page_config(layout="wide")
-st.title("📊 PRO TRADING DASHBOARD")
 
-if not check_net():
-    st.warning("No Internet...")
-    time.sleep(5)
-    st.rerun()
+stocks = ["TATASTEEL.NS","ITC.NS","WIPRO.NS","IDFC.NS","BANKBARODA.NS","ONGC.NS"]
 
-res=[]
-best=None;bs=-999;bd=None
+# ===================== DATA =====================
+def get_data(stock, period, interval):
+    return yf.download(stock, period=period, interval=interval)
+
+# ===================== 12 RULE ENGINE =====================
+def analyze(data):
+    score = 0
+    rules = {}
+    
+    close = data['Close']
+    open_ = data['Open']
+    high = data['High']
+    low = data['Low']
+    volume = data['Volume']
+    
+    # 1 Trend
+    rules["Trend"] = close.iloc[-1] > close.mean()
+    score += 1 if rules["Trend"] else -1
+    
+    # 2 Momentum
+    rules["Momentum"] = close.iloc[-1] > close.iloc[-2]
+    score += 1 if rules["Momentum"] else -1
+    
+    # 3 Volume
+    rules["Volume"] = volume.iloc[-1] > volume.mean()
+    score += 1 if rules["Volume"] else 0
+    
+    # 4 Candle
+    rules["Candle"] = close.iloc[-1] > open_.iloc[-1]
+    score += 1 if rules["Candle"] else -1
+    
+    # 5 Breakout
+    rules["Breakout"] = close.iloc[-1] > high[:-1].max()
+    score += 2 if rules["Breakout"] else 0
+    
+    # 6 Breakdown
+    rules["Breakdown"] = close.iloc[-1] < low[:-1].min()
+    score -= 2 if rules["Breakdown"] else 0
+    
+    # 7 Volatility
+    rules["Volatility"] = (high.iloc[-1]-low.iloc[-1]) > (high.mean()-low.mean())
+    score += 1 if rules["Volatility"] else 0
+    
+    # 8 Buyer vs Seller
+    mid = (high.iloc[-1] + low.iloc[-1]) / 2
+    rules["BuyerStrength"] = close.iloc[-1] > mid
+    score += 1 if rules["BuyerStrength"] else -1
+    
+    # 9 Prev High
+    rules["PrevHigh"] = close.iloc[-1] > high.iloc[-2]
+    score += 1 if rules["PrevHigh"] else -1
+    
+    # 10 Prev Low
+    rules["PrevLow"] = close.iloc[-1] > low.iloc[-2]
+    score += 1 if rules["PrevLow"] else -1
+    
+    # 11 Gap
+    rules["GapUp"] = open_.iloc[-1] > close.iloc[-2]
+    score += 1 if rules["GapUp"] else 0
+    
+    # 12 MA Cross
+    ma5 = close.rolling(5).mean()
+    ma10 = close.rolling(10).mean()
+    rules["MA Cross"] = ma5.iloc[-1] > ma10.iloc[-1]
+    score += 1 if rules["MA Cross"] else -1
+    
+    return score, rules
+
+# ===================== PREDICT =====================
+def predict(score):
+    if score >= 7:
+        return "🔥 STRONG BUY"
+    elif score >= 4:
+        return "🟢 BUY"
+    elif score <= -5:
+        return "🔻 STRONG SELL"
+    elif score <= -2:
+        return "🔴 SELL"
+    else:
+        return "⚠️ WAIT"
+
+# ===================== CONFIDENCE =====================
+def confidence(score):
+    return min(100, abs(score)*10)
+
+# ===================== SESSION =====================
+def session_analysis(data):
+    step = len(data)//4
+    parts = [data.iloc[i*step:(i+1)*step] for i in range(4)]
+    
+    result = {}
+    for i, df in enumerate(parts):
+        if len(df) < 2: continue
+        s = df['Close'].iloc[0]
+        e = df['Close'].iloc[-1]
+        d = "UP" if e>s else "DOWN"
+        result[f"S{i+1}"] = (round(s,2),round(e,2),d)
+    
+    return result
+
+# ===================== BENCHMARK =====================
+def calc(df):
+    return round(df['High'].max(),2), round(df['Low'].min(),2), round(df['Close'].mean(),2)
+
+# ===================== TIMEFRAME =====================
+tf = st.selectbox("Timeframe",["Today","3 Days","Weekly","Monthly","Yearly"])
+
+if tf=="Today": period,interval="1d","5m"
+elif tf=="3 Days": period,interval="3d","5m"
+elif tf=="Weekly": period,interval="7d","15m"
+elif tf=="Monthly": period,interval="1mo","30m"
+else: period,interval="1y","1d"
+
+st.title("📊 AI TRADING DASHBOARD (PRO)")
+
+# ===================== MAIN =====================
+rows=[]
 
 for s in stocks:
-    try:
-        d=fetch(s)
-        if d is None or len(d)<10: continue
-        sc=analyze(d)
-        res.append((s,predict(sc),sc,movement(d),trap(d)))
-        if sc>bs:
-            bs=sc;best=s;bd=d
-    except Exception as e:
-        log_error(e)
+    d=get_data(s,period,interval)
+    if len(d)<10: continue
+    
+    sc, rules = analyze(d)
+    sig = predict(sc)
+    conf = confidence(sc)
+    
+    rows.append([s,sig,sc,conf])
 
-df=pd.DataFrame(res,columns=["Stock","Signal","Score","Move","Trap"])
+df=pd.DataFrame(rows,columns=["Stock","Signal","Score","Confidence %"])
+
 st.dataframe(df,use_container_width=True)
 
-if bd is not None:
-    st.subheader(f"🔥 {best}")
-    sup,resi=sr(bd)
-    act,en,sl,tg=plan(bd,sup,resi)
+# ===================== BEST =====================
+best=df.sort_values("Score",ascending=False).iloc[0]
 
-    st.write(f"Support: {sup} | Resistance: {resi}")
-    st.write(f"Action: {act}")
+st.markdown(f"""
+## 🔥 BEST TRADE
+{best['Stock']} | {best['Signal']} | Confidence: {best['Confidence %']}%
+""")
 
-    if en:
-        st.write(f"Entry: {en} SL: {sl} Target: {tg}")
+# ===================== RULE BREAKDOWN =====================
+st.markdown("## 🧠 RULE BREAKDOWN")
 
-    fig,ax=plt.subplots()
-    ax.plot(bd['Close'])
-    ax.axhline(sup,color='green')
-    ax.axhline(resi,color='red')
-    if en: ax.scatter(len(bd)-1,en,color='blue')
-    st.pyplot(fig)
+sel=st.selectbox("Select Stock",stocks)
 
-    st.subheader("Sessions")
-    for s in session(bd):
-        st.write(s)
+d=get_data(sel,period,interval)
+sc,rules=analyze(d)
 
-st.write("Refreshing 30 sec...")
-time.sleep(30)
-st.rerun()
+for k,v in rules.items():
+    st.write(f"{k}: {'🟢' if v else '🔴'}")
+
+# ===================== SESSION =====================
+st.markdown("## 📊 SESSION")
+
+today=yf.download(sel,period="1d",interval="5m")
+sess=session_analysis(today)
+
+for k,v in sess.items():
+    st.write(f"{k}: {v[0]} → {v[1]} ({'🟢' if v[2]=='UP' else '🔴'} {v[2]})")
+
+# ===================== HISTORY =====================
+st.markdown("## 📅 3 DAY HISTORY")
+
+d3=yf.download(sel,period="3d",interval="30m")
+d3['Date']=d3.index.date
+
+for dt,g in d3.groupby("Date"):
+    s=session_analysis(g)
+    line=f"{dt}: "
+    for k,v in s.items():
+        line+=f"{k}:{v[0]}-{v[1]} | "
+    st.text(line)
+
+# ===================== BENCHMARK =====================
+st.markdown("## 📊 BENCHMARK")
+
+yr=yf.download(sel,period="1y",interval="1d")
+
+w=yr.tail(5)
+m=yr.tail(22)
+
+wh,wl,wa=calc(w)
+mh,ml,ma=calc(m)
+yh,yl,ya=calc(yr)
+
+st.markdown(f"""
+WEEK: {wh}/{wl} Avg:{wa}  
+MONTH: {mh}/{ml} Avg:{ma}  
+52W: {yh}/{yl} Avg:{ya}
+""")
+
+# ===================== PRED =====================
+st.markdown("## 💡 FINAL SIGNAL")
+
+cp=yr['Close'].iloc[-1]
+
+if cp>ma and cp>wa:
+    st.success("🔥 STRONG UP")
+elif cp>ma:
+    st.info("🟢 UP")
+elif cp<ma and cp<wa:
+    st.error("🔻 STRONG DOWN")
+else:
+    st.warning("⚠️ SIDEWAYS")
+
+# ===================== CHART =====================
+st.markdown("## 📊 CHART")
+
+fig=go.Figure(data=[go.Candlestick(
+    x=d.index,
+    open=d['Open'],
+    high=d['High'],
+    low=d['Low'],
+    close=d['Close']
+)])
+
+fig.update_layout(template="plotly_dark")
+
+st.plotly_chart(fig,use_container_width=True)
